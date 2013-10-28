@@ -1,2 +1,81 @@
+/****************************************
+*	Defusing Game Mode					*
+*	Author:		steeffeen				*
+*	Contact:	mail@steeffeen.com		*
+****************************************/
 
 #Extends "Modes/ShootMania/ModeBase.Script.txt"
+
+
+/****************************************
+	INCLUDES
+****************************************/
+
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+
+
+/****************************************
+	LABELS
+****************************************/
+
+***StartServer***
+***
+// Set mode options
+UseClans = True;
+***
+
+***StartMap***
+***
+// Set the begin of the match
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+StartTime = Now;
+***
+
+***PlayLoop***
+***
+// Manage players
+foreach (Player in Players) {
+	switch (Player.SpawnStatus) {
+		case CSmPlayer::ESpawnStatus::NotSpawned: {
+			// Not spawned
+			
+			if (Player.RequestsSpectate) {
+				// The player wants to spectate
+				continue;
+			}
+			
+			// Spawn the player
+			MySpawnPlayer(Player);
+		}
+		case CSmPlayer::ESpawnStatus::Spawned: {
+			// Spawned
+			
+			if (Player.RequestsSpectate) {
+				// The player wants to spectate
+				UnspawnPlayer(Player);
+				continue;
+			}
+			
+			if (Player.RequestedClan != Player.CurrentClan) {
+				// The player wants to change its team
+				UnspawnPlayer(Player);
+				continue;
+			}
+		}
+	}
+}
+***
+
+
+/****************************************
+	FUNCTIONS
+****************************************/
+
+// Spawn the player
+Void MySpawnPlayer(CSmPlayer _Player) {
+	// Find a spawn block for the player
+	declare Spawn <=> BlockSpawns[0];
+	
+	// Spawn the player in its desired team
+	SM::SpawnPlayer(_Player, _Player.RequestedClan, Spawn);
+}
