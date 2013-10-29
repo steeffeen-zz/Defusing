@@ -11,6 +11,7 @@
 	INCLUDES
 ****************************************/
 
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
 #Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
 
 
@@ -20,15 +21,30 @@
 
 ***StartServer***
 ***
+// Enable rounds in modebase
+MB_UseSectionRound = True;
+
 // Set mode options
 UseClans = True;
+
+// Add bots
+Users_SetNbFakeUsers(2, 2);
 ***
 
 ***StartMap***
 ***
+// Begin match
+Score::MatchBegin();
+
 // Set the begin of the match
-UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
 StartTime = Now;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+***
+
+***StartRound***
+***
+// Begin round
+Score::RoundBegin();
 ***
 
 ***PlayLoop***
@@ -37,10 +53,9 @@ StartTime = Now;
 foreach (Player in Players) {
 	switch (Player.SpawnStatus) {
 		case CSmPlayer::ESpawnStatus::NotSpawned: {
-			// Not spawned
 			
 			if (Player.RequestsSpectate) {
-				// The player wants to spectate
+				// The player wants to spectate - Do nothing
 				continue;
 			}
 			
@@ -48,7 +63,6 @@ foreach (Player in Players) {
 			MySpawnPlayer(Player);
 		}
 		case CSmPlayer::ESpawnStatus::Spawned: {
-			// Spawned
 			
 			if (Player.RequestsSpectate) {
 				// The player wants to spectate
@@ -64,6 +78,60 @@ foreach (Player in Players) {
 		}
 	}
 }
+
+// Manage events
+foreach (Event in PendingEvents) {
+	switch (Event.Type) {
+		case CSmModeEvent::EType::OnHit: {
+		
+			if (Event.Shooter == Event.Victim) {
+				// Self hit
+				Discard(Event);
+				continue;
+			}
+			
+			if (Event.Shooter.CurrentClan == Event.Victim.CurrentClan) {
+				// Team hit
+				Discard(Event);
+				continue;
+			}
+			
+			// Opponent hit
+			
+			// Calculate points
+			declare Points = Event.Damage / 100;
+			
+			// Grant points for the shooter
+			Score::AddPoints(Event.Shooter, Points);
+			
+			// Set the amount of + displayed for the shooter
+			Event.ShooterPoints = Points;
+			
+			// Pass on event
+			PassOn(Event);
+		}
+		case CSmModeEvent::EType::OnArmorEmpty: {
+			// Player has been eliminated
+			PassOn(Event);
+		}
+		default: {
+			// Not used events
+			Discard(Event);
+		}
+	}
+}
+***
+
+***EndRound***
+***
+// End round
+Score::RoundEnd();
+***
+
+***EndMap***
+***
+// End match
+Score::MatchEnd();
 ***
 
 
@@ -71,7 +139,7 @@ foreach (Player in Players) {
 	FUNCTIONS
 ****************************************/
 
-// Spawn the player
+// Spawn the given player
 Void MySpawnPlayer(CSmPlayer _Player) {
 	// Find a spawn block for the player
 	declare Spawn <=> BlockSpawns[0];
