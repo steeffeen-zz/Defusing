@@ -17,10 +17,19 @@
 
 
 /****************************************
+	Settings
+****************************************/
+
+#Setting	S_ActivationTime		5.		as _("Time to activate the Bomb (Seconds)")
+#Setting	S_DefusingTimeFactor	1.5		as _("Factor for Time to defuse the Bomb")
+
+
+/****************************************
 	CONSTANTS
 ****************************************/
 
-#Const	Version	"0.03 (29.10.2013)"
+#Const	Version					"0.04 (11.11.2013)"
+#Const	CompatibleMapTypes		"DefusingArena"
 
 
 /****************************************
@@ -29,7 +38,8 @@
 
 declare Ident[][Integer]	G_ClanSpawnIds;		// Ids of each clans spawn blocks
 declare Ident[]				G_BombPoleIds;		// Ids of the bomb spots
-declare Integer				G_AttackingTeam;	// Clan number of the currently attacking team
+declare Integer				G_AttackingClan;	// Clan number of the currently attacking team
+declare Ident				G_BombCarrierId;	// Id of the object carrying the bomb (player/pole)
 
 
 /****************************************
@@ -138,11 +148,85 @@ foreach (Event in PendingEvents) {
 			// Player has been eliminated
 			PassOn(Event);
 		}
+		case CSmModeEvent::EType::OnCapture: {
+			// Bomb has been planted
+			G_BombCarrierId = Event.BlockPole.Id;
+			PassOn(Event);
+		}
 		default: {
 			// Not used events
 			Discard(Event);
 		}
 	}
+}
+
+// Manage pole captures
+foreach (PoleId in G_BombPoleIds) {
+	declare Pole <=> BlockPoles[PoleId];
+	
+	if (BlockPoles.existskey(G_BombCarrierId)) {
+		// Bomb has been activated
+		
+		if (PoleId != G_BombCarrierId) {
+			// On another pole...
+			Pole.Gauge.Speed = 0;
+			Pole.Gauge.Value = 0;
+			continue;
+		}
+		
+		declare Defusing = False;
+		
+		// Loop through capturing players
+		foreach (PlayerId in Pole.Sector.PlayersIds) {
+			declare Player <=> Players[PlayerId];
+			
+			if (Player.CurrentClan == G_AttackingClan) {
+				// Attacker
+				continue;
+			}
+			
+			// Defender
+			Defusing = True;
+			break;
+		}
+		
+		if (Defusing) {
+			// Being defused!
+			Pole.Gauge.Speed = -MathLib::NearestInteger(Pole.Gauge.Max / (S_ActivationTime * S_DefusingTimeFactor * 1000.));
+			continue;
+		}
+		
+		// Not defusing
+		Pole.Gauge.Speed = 0;
+		Pole.Gauge.Value = Pole.Gauge.Max;
+		continue;
+	}
+	
+	// Bomb is not yet activated
+	declare Activating = False;
+	
+	// Loop through capturing players
+	foreach (PlayerId in Pole.Sector.PlayersIds) {
+		declare Player <=> Players[PlayerId];
+		
+		if (Player.CurrentClan != G_AttackingClan) {
+			// Defender
+			continue;
+		}
+
+		// Attacker
+		Activating = True;
+	}
+	
+	if (Activating) {
+		// Being activated!
+		Pole.Gauge.Speed = MathLib::NearestInteger(Pole.Gauge.Max / (S_ActivationTime * 1000.));
+		continue;
+	}
+	
+	// Not activating
+	Pole.Gauge.Speed = 0;
+	Pole.Gauge.Value = 0;
 }
 ***
 
@@ -209,12 +293,15 @@ Void PrepareMap() {
 			continue;
 		}
 		
+		// Init values
+		Pole.Gauge.Max = 100000;
+		
 		// Add pole to bomb spots
 		G_BombPoleIds.add(Pole.Id);
 	}
 	
 	// Reset attacking team
-	G_AttackingTeam = -1;
+	G_AttackingClan = -1;
 }
 
 // Prepare next round
@@ -224,17 +311,17 @@ Void PrepareRound() {
 	
 	declare SwitchSides = True;
 	
-	if (G_AttackingTeam < 0) {
+	if (G_AttackingClan < 0) {
 		// Pick randomly which team starts attacking first
-		G_AttackingTeam = MathLib::Rand(1, 2);
+		G_AttackingClan = MathLib::Rand(1, 2);
 		
-		if (G_AttackingTeam == 1) {
+		if (G_AttackingClan == 1) {
 			// The spawns are fine like that - No need to switch sides
 			SwitchSides = False;
 		}
 	} else {
 		// Switch attacking team
-		G_AttackingTeam = 3 - G_AttackingTeam;
+		G_AttackingClan = 3 - G_AttackingClan;
 	}
 	
 	if (SwitchSides) {
@@ -259,10 +346,11 @@ Void PrepareRound() {
 		declare Pole <=> BlockPoles[PoleId];
 		
 		// Set team color
-		Pole.Base.Clan = G_AttackingTeam;
-		Pole.Gauge.Clan = G_AttackingTeam;
+		Pole.Base.Clan = G_AttackingClan;
+		Pole.Gauge.Clan = G_AttackingClan;
 		
 		// Reset capture progress
-		Pole.Gauge.ValueReal = 0.;
+		Pole.Gauge.Value = 0;
+		Pole.Gauge.Speed = 0;
 	}
 }
