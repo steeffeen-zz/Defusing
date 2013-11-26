@@ -12,6 +12,7 @@
 ****************************************/
 
 #Include "MathLib" as MathLib
+#Include "Libs/Nadeo/Victory.Script.txt" as Victory
 #Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
 #Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
 
@@ -20,15 +21,22 @@
 	Settings
 ****************************************/
 
+#Setting	S_RoundsTimeLimit		2.		as _("Time Limit to activate the Bomb (Minutes)")
+#Setting	S_RoundsToWin			5		as _("Rounds to win a Map")
+#Setting	S_RoundGapToWin			2		as _("Rounds Gap needed to win a Map")
+#Setting	S_RoundsLimit			10		as _("Rounds Limit (First Team reaching it wins)")
+
 #Setting	S_ActivationTime		5.		as _("Time to activate the Bomb (Seconds)")
 #Setting	S_DefusingTimeFactor	1.5		as _("Factor for Time to defuse the Bomb")
+#Setting	S_BombExplosionTime		45.		as _("Time until an activated Bomb explodes (Seconds)")
 
 
 /****************************************
 	CONSTANTS
 ****************************************/
 
-#Const	Version					"0.04 (11.11.2013)"
+#Const	ScriptName				"Defusing.Script.txt"
+#Const	Version					"0.05 (20.11.2013)"
 #Const	CompatibleMapTypes		"DefusingArena"
 
 
@@ -45,6 +53,14 @@ declare Ident				G_BombCarrierId;	// Id of the object carrying the bomb (player/
 /****************************************
 	LABELS
 ****************************************/
+
+***LogVersion***
+***
+MB_LogVersion(ScriptName, Version);
+MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
+MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
+MB_LogVersion(Victory::GetScriptName(), Victory::GetScriptVersion());
+***
 
 ***StartServer***
 ***
@@ -64,7 +80,11 @@ Users_SetNbFakeUsers(2, 2);
 PrepareMap();
 
 // Begin match
+ClanScores[1] = 0;
+ClanScores[2] = 0;
+UpdateClanScoresSummary();
 Score::MatchBegin();
+Victory::MatchBegin();
 ***
 
 ***StartRound***
@@ -74,10 +94,12 @@ PrepareRound();
 
 // Prepare scores
 Score::RoundBegin();
+Victory::RoundBegin();
 
 // Set the begin of the round
 Mode::Synchro_DoBarrier();
 StartTime = Now + 3500;
+EndTime = MathLib::NearestInteger(StartTime + S_RoundsTimeLimit * 60. * 1000.);
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
 ***
 
@@ -151,6 +173,7 @@ foreach (Event in PendingEvents) {
 		case CSmModeEvent::EType::OnCapture: {
 			// Bomb has been planted
 			G_BombCarrierId = Event.BlockPole.Id;
+			EndTime = MathLib::NearestInteger(Now + S_BombExplosionTime * 1000.);
 			PassOn(Event);
 		}
 		default: {
@@ -192,6 +215,10 @@ foreach (PoleId in G_BombPoleIds) {
 		
 		if (Defusing) {
 			// Being defused!
+			if (Pole.Gauge.ValueReal <= 0.) {
+				// Completely defused!
+				Victory::SetRoundWinnerIfNoWinner(3-G_AttackingClan);
+			}
 			Pole.Gauge.Speed = -MathLib::NearestInteger(Pole.Gauge.Max / (S_ActivationTime * S_DefusingTimeFactor * 1000.));
 			continue;
 		}
@@ -228,20 +255,54 @@ foreach (PoleId in G_BombPoleIds) {
 	Pole.Gauge.Speed = 0;
 	Pole.Gauge.Value = 0;
 }
+
+// Round end conditions
+if (Now >= EndTime) {
+	if (BlockPoles.existskey(G_BombCarrierId)) {
+		// Bomb exploded
+		Victory::SetRoundWinnerIfNoWinner(G_AttackingClan);
+	} else {
+		// Attackers didn't set bomb
+		Victory::SetRoundWinnerIfNoWinner(3-G_AttackingClan);
+	}
+}
+if (Victory::NoRoundWinner()) continue;
+// Round is won
+MB_StopRound = True;
 ***
 
 ***EndRound***
 ***
 // End round
 StartTime = -1;
+EndTime = -1;
 Score::RoundEnd();
+Victory::SetRoundDrawIfNoWinner();
 UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+
+// Validate round winner
+if (!Victory::IsRoundDraw()) {
+	foreach (Index => Team in Teams) {
+		if (!Victory::IsRoundWinner(Index+1)) continue;
+		ClanScores[Index+1] += 1;
+		break;
+	}
+	UpdateClanScoresSummary();
+}
+Victory::RoundEnd();
+
+// Match end conditions
+Victory::SetMatchWinnerFromScore(S_RoundsToWin, S_RoundGapToWin, S_RoundsLimit);
+if (Victory::NoMatchWinner()) continue;
+// Match is won
+MB_StopMap = True;
 ***
 
 ***EndMap***
 ***
 // End match
 Score::MatchEnd();
+Victory::MatchEnd();
 ***
 
 
@@ -309,12 +370,11 @@ Void PrepareRound() {
 	// Despawn all players
 	SM::UnspawnAllPlayers();
 	
+	// Switch sides if necessary
 	declare SwitchSides = True;
-	
-	if (G_AttackingClan < 0) {
+	if (G_AttackingClan <= 0) {
 		// Pick randomly which team starts attacking first
 		G_AttackingClan = MathLib::Rand(1, 2);
-		
 		if (G_AttackingClan == 1) {
 			// The spawns are fine like that - No need to switch sides
 			SwitchSides = False;
@@ -323,7 +383,6 @@ Void PrepareRound() {
 		// Switch attacking team
 		G_AttackingClan = 3 - G_AttackingClan;
 	}
-	
 	if (SwitchSides) {
 		// The teams are switching sides! - Switch spawn arrays
 		declare Temp = G_ClanSpawnIds[1];
@@ -350,7 +409,38 @@ Void PrepareRound() {
 		Pole.Gauge.Clan = G_AttackingClan;
 		
 		// Reset capture progress
-		Pole.Gauge.Value = 0;
 		Pole.Gauge.Speed = 0;
+		Pole.Gauge.Value = 0;
 	}
+	
+	// Reset bomb carrier
+	G_BombCarrierId = NullId;
+}
+
+// Updates clan scores at the top
+Void UpdateClanScoresSummary() {
+	declare PlayerClan1Id = NullId;
+	declare PlayerClan2Id = NullId;
+	foreach (Player in Players) {
+		if (Player.CurrentClan == 1) {
+			if (PlayerClan1Id != NullId) continue;
+			PlayerClan1Id = Player.Id;
+		}
+		if (Player.CurrentClan == 2) {
+			if (PlayerClan2Id != NullId) continue;
+			PlayerClan2Id = Player.Id;
+		}
+		if (PlayerClan1Id != NullId && PlayerClan2Id != NullId) break;
+	}
+	if (PlayerClan1Id == NullId || PlayerClan2Id == NullId) {
+		UIManager.UIAll.OverlayScoreSummary = False;
+		return;
+	}
+	UIManager.UIAll.OverlayScoreSummary = True;
+	UIManager.UIAll.ScoreSummary_Player1 = PlayerClan1Id;
+	UIManager.UIAll.ScoreSummary_Player2 = PlayerClan2Id;
+	UIManager.UIAll.ScoreSummary_Points1 = ClanScores[1];
+	UIManager.UIAll.ScoreSummary_Points2 = ClanScores[2];
+	UIManager.UIAll.ScoreSummary_MatchPoints1 = -1;
+	UIManager.UIAll.ScoreSummary_MatchPoints2 = -1;
 }
